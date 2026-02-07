@@ -1,0 +1,170 @@
+#!/bin/bash
+set -e
+BUSYBOXED_DIR="/usr/src/busyboxed"
+BUSYBOX_CONFIG="$BUSYBOXED_DIR/.config"
+BUSYBOX_BIN="$BUSYBOXED_DIR/bin/busybox"
+BUSYBOX_REPO="https://github.com/mirror/busybox"
+die() {
+	echo "[!] $1" >&2
+	exit 1
+}
+
+check_root() {
+	[[ $EUID -eq 0 ]] || die "must run as root"
+}
+
+fetch_busybox() {
+	local version="${1:-master}"
+	if [[ -d "$BUSYBOXED_DIR/.git" ]]; then
+		echo ":: updating BusyBox..."
+		cd "$BUSYBOXED_DIR"
+		git fetch --tags
+		if [[ "$version" == "master" ]]; then
+			git checkout master
+			git pull
+		else
+			git checkout "$version"
+		fi
+	else
+		echo ":: cloning BusyBox..."
+		mkdir -p "$BUSYBOXED_DIR"
+		git clone "$BUSYBOX_REPO" "$BUSYBOXED_DIR"
+		cd "$BUSYBOXED_DIR"
+		if [[ "$version" != "master" ]]; then
+			git checkout "$version"
+		fi
+	fi
+}
+
+setup_busybox() {
+	check_root
+	local version="${1:-master}"
+	echo ":: setting up busyboxed..."
+	fetch_busybox "$version"
+	cd "$BUSYBOXED_DIR"
+	if [[ ! -f "$BUSYBOX_CONFIG" ]]; then
+		if [[ "$BUSYBOXED_DEFCONFIG" == "" ]]; then
+			echo ":: generating minimal config..."
+			make allnoconfig
+		else
+			echo ":: generating a default config..."
+			make defconfig
+		fi
+	fi
+
+	echo ":: setup complete!"
+}
+
+update_busybox() {
+	check_root
+	local version="${1:-master}"
+	[[ -d "$BUSYBOXED_DIR" ]] || die "BusyBox not setup. run 'busyboxed setup' first"
+	fetch_busybox "$version"
+	echo ":: BusyBox updated!"
+}
+
+toggle_applet() {
+	local action="$1"
+	shift
+	local applets=("$@")
+	check_root
+	[[ -d "$BUSYBOXED_DIR" ]] || die "BusyBox not setup. run 'busyboxed setup' first"
+	[[ -f "$BUSYBOX_CONFIG" ]] || die "Config not found. run 'busyboxed setup' first"
+	cd "$BUSYBOXED_DIR"
+	for applet in "${applets[@]}"; do
+		local config_name=$(echo "$applet" | tr '[:lower:]' '[:upper:]')
+		config_name="CONFIG_${config_name}"
+		if [[ "$action" == "add" ]]; then
+			echo ":: enabling $applet..."
+			if grep -q "^# $config_name is not set" "$BUSYBOX_CONFIG"; then
+				sed -i "s/^# $config_name is not set/$config_name=y/" "$BUSYBOX_CONFIG"
+			elif grep -q "^$config_name=y" "$BUSYBOX_CONFIG"; then
+				echo ":: $applet already enabled"
+			else
+				echo "$config_name=y" >>"$BUSYBOX_CONFIG"
+			fi
+		else
+			echo ":: disabling $applet..."
+			if grep -q "^$config_name=y" "$BUSYBOX_CONFIG"; then
+				sed -i "s/^$config_name=y/# $config_name is not set/" "$BUSYBOX_CONFIG"
+			else
+				echo ":: $applet already disabled or not found"
+			fi
+		fi
+	done
+
+	make oldconfig </dev/null
+	echo ":: config updated!"
+}
+
+build_busybox() {
+	check_root
+	[[ -d "$BUSYBOXED_DIR" ]] || die "BusyBox not setup. run 'busyboxed setup' first"
+	[[ -f "$BUSYBOX_CONFIG" ]] || die "Config not found. run 'busyboxed setup' first"
+	cd "$BUSYBOXED_DIR"
+	echo ":: building BusyBox..."
+	make -j$(nproc)
+	mkdir -p "$(dirname "$BUSYBOX_BIN")"
+	cp busybox "$BUSYBOX_BIN"
+	echo ":: build complete! binary at: $BUSYBOX_BIN"
+}
+
+list_applets() {
+	[[ -f "$BUSYBOX_CONFIG" ]] || die "config not found. run 'busyboxed setup' first"
+	echo ":: enabled applets:"
+	grep "^CONFIG_.*=y" "$BUSYBOX_CONFIG" | sed 's/CONFIG_//' | sed 's/=y//' | tr '[:upper:]' '[:lower:]' | sort
+}
+
+show_usage() {
+	cat <<EOF
+busyboxed - BusyBox applet package manager
+
+Usage:
+    busyboxed setup [version]       Setup busyboxed (fetch BusyBox source)
+    busyboxed update [version]      Update BusyBox source
+    busyboxed add <applet...>       Enable applet(s)
+    busyboxed rm <applet...>        Disable applet(s)
+    busyboxed build                 Compile BusyBox
+    busyboxed list                  List enabled applets
+    busyboxed help                  Show this help
+
+Examples:
+    busyboxed setup
+    busyboxed setup 1_36_1
+    busyboxed add ls cat grep
+    busyboxed rm vi
+    busyboxed build
+EOF
+}
+
+case "${1:-}" in
+setup)
+	setup_busybox "$2"
+	;;
+update)
+	update_busybox "$2"
+	;;
+add)
+	shift
+	[[ $# -eq 0 ]] && die "no applets specified"
+	toggle_applet add "$@"
+	;;
+rm)
+	shift
+	[[ $# -eq 0 ]] && die "no applets specified"
+	toggle_applet rm "$@"
+	;;
+build)
+	build_busybox
+	;;
+list)
+	list_applets
+	;;
+help | --help | -h)
+	show_usage
+	;;
+*)
+	show_usage
+	exit 1
+	;;
+esac
