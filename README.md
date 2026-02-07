@@ -10,7 +10,7 @@ you first got to clone busybox,
 sudo busyboxed setup 1_36_1  # version number, replacing . with _
 ```
 
-config is mostly empty at first, no applets.. (unless you ran it with the env var $BUSYBOXED_DEFCONFIG="anythinghere").
+config is mostly empty at first, no applets.. (unless you ran it with the env var `BUSYBOXED_DEFCONFIG="anythinghere"`).
 to add applets,
 
 ```sh
@@ -30,3 +30,11 @@ sudo busyboxed build
 ```
 
 and busybox will be at `/usr/src/busyboxed/bin/busybox`. feel free to symlink it to /bin/.
+
+## updating busybox
+
+you can update busybox by running:
+
+```sh
+sudo busyboxed update [version]
+```
